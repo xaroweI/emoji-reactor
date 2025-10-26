@@ -1,28 +1,24 @@
-#!/usr/bin/env python3
-"""
-Real-time emoji display based on camera pose and facial expression detection.
-"""
-
 import cv2
 import mediapipe as mp
 import numpy as np
 
-# Initialize MediaPipe
 mp_pose = mp.solutions.pose
 mp_face_mesh = mp.solutions.face_mesh
 mp_drawing = mp.solutions.drawing_utils
+mp_hands = mp.solutions.hands
 
-# Configuration
 SMILE_THRESHOLD = 0.35
+MONKEY_POSE_THRESHOLD = 0.15 
 WINDOW_WIDTH = 720
 WINDOW_HEIGHT = 450
 EMOJI_WINDOW_SIZE = (WINDOW_WIDTH, WINDOW_HEIGHT)
 
-# Load emoji images
 try:
     smiling_emoji = cv2.imread("smile.jpg")
     straight_face_emoji = cv2.imread("plain.png")
     hands_up_emoji = cv2.imread("air.jpg")
+    monkey_thinking = cv2.imread("Monkey.jpg")
+    monkey_finger_up = cv2.imread("Monkey2.jpg")
 
     if smiling_emoji is None:
         raise FileNotFoundError("smile.jpg not found")
@@ -30,11 +26,18 @@ try:
         raise FileNotFoundError("plain.png not found")
     if hands_up_emoji is None:
         raise FileNotFoundError("air.jpg not found")
+    if monkey_thinking is None:
+        raise FileNotFoundError("Monkey.jpg not found")
+    if monkey_finger_up is None:
+        monkey_finger_up = cv2.imread("Monekey2.jpg")
+        if monkey_finger_up is None:
+             raise FileNotFoundError("Monkey2.jpg or Monekey2.jpg not found")
 
-    # Resize emojis
     smiling_emoji = cv2.resize(smiling_emoji, EMOJI_WINDOW_SIZE)
     straight_face_emoji = cv2.resize(straight_face_emoji, EMOJI_WINDOW_SIZE)
     hands_up_emoji = cv2.resize(hands_up_emoji, EMOJI_WINDOW_SIZE)
+    monkey_thinking = cv2.resize(monkey_thinking, EMOJI_WINDOW_SIZE)
+    monkey_finger_up = cv2.resize(monkey_finger_up, EMOJI_WINDOW_SIZE)
     
 except Exception as e:
     print("Error loading emoji images!")
@@ -43,11 +46,12 @@ except Exception as e:
     print("- smile.jpg (smiling face)")
     print("- plain.png (straight face)")
     print("- air.jpg (hands up)")
+    print("- Monkey.jpg (thinking monkey)")
+    print("- Monkey2.jpg (finger up monkey)")
     exit()
 
 blank_emoji = np.zeros((EMOJI_WINDOW_SIZE[0], EMOJI_WINDOW_SIZE[1], 3), dtype=np.uint8)
 
-# Start webcam
 cap = cv2.VideoCapture(0)
 
 if not cap.isOpened():
@@ -62,13 +66,16 @@ cv2.moveWindow('Camera Feed', 100, 100)
 cv2.moveWindow('Emoji Output', WINDOW_WIDTH + 150, 100)
 
 print("Controls:")
-print("  Press 'q' to quit")
-print("  Raise hands above shoulders for hands up")
-print("  Smile for smiling emoji")
-print("  Straight face for neutral emoji")
+print("  Press 'q' to quit")
+print("  Raise hands above shoulders for hands up")
+print("  Put finger near chin for thinking monkey (Monkey.jpg)")
+print("  Point finger near face for finger up monkey (Monkey2.jpg)")
+print("  Smile for smiling emoji")
+print("  Straight face for neutral emoji")
 
 with mp_pose.Pose(min_detection_confidence=0.5, min_tracking_confidence=0.5) as pose, \
-     mp_face_mesh.FaceMesh(max_num_faces=1, min_detection_confidence=0.5) as face_mesh:
+     mp_face_mesh.FaceMesh(max_num_faces=1, min_detection_confidence=0.5) as face_mesh, \
+     mp_hands.Hands(min_detection_confidence=0.5, min_tracking_confidence=0.5) as hands:
 
     while cap.isOpened():
         success, frame = cap.read()
@@ -80,9 +87,13 @@ with mp_pose.Pose(min_detection_confidence=0.5, min_tracking_confidence=0.5) as 
         image_rgb.flags.writeable = False
 
         current_state = "STRAIGHT_FACE"
+        face_anchor = None
 
-        # Check for hands up
+        # MONKEEE
         results_pose = pose.process(image_rgb)
+        results_hands = hands.process(image_rgb)
+        results_face = face_mesh.process(image_rgb)
+
         if results_pose.pose_landmarks:
             landmarks = results_pose.pose_landmarks.landmark
             
@@ -94,9 +105,32 @@ with mp_pose.Pose(min_detection_confidence=0.5, min_tracking_confidence=0.5) as 
             if (left_wrist.y < left_shoulder.y) or (right_wrist.y < right_shoulder.y):
                 current_state = "HANDS_UP"
         
-        # Check facial expression if hands not up
         if current_state != "HANDS_UP":
-            results_face = face_mesh.process(image_rgb)
+            if results_face.multi_face_landmarks:
+                face_anchor = results_face.multi_face_landmarks[0].landmark[4]
+
+            if results_hands.multi_hand_landmarks and face_anchor:
+                for hand_landmarks in results_hands.multi_hand_landmarks:
+                    finger_tip = hand_landmarks.landmark[mp_hands.HandLandmark.INDEX_FINGER_TIP]
+                    
+                    distance = np.sqrt((finger_tip.x - face_anchor.x)**2 + (finger_tip.y - face_anchor.y)**2)
+                    
+                    if distance < MONKEY_POSE_THRESHOLD:
+                        
+                        wrist = hand_landmarks.landmark[mp_hands.HandLandmark.WRIST]
+                        
+                        Y_DIFFERENCE_FOR_UP = 0.2
+                        
+                        if wrist.y - finger_tip.y > Y_DIFFERENCE_FOR_UP: 
+                            current_state = "MONKEY_UP" # MONKEY UPPP
+                        else:
+                            current_state = "MONKEY_THINKING"
+                        break
+
+        if current_state == "STRAIGHT_FACE":
+            if results_face is None:
+                results_face = face_mesh.process(image_rgb) 
+            
             if results_face.multi_face_landmarks:
                 for face_landmarks in results_face.multi_face_landmarks:
                     left_corner = face_landmarks.landmark[291]
@@ -114,16 +148,21 @@ with mp_pose.Pose(min_detection_confidence=0.5, min_tracking_confidence=0.5) as 
                         else:
                             current_state = "STRAIGHT_FACE"
         
-        # Select emoji based on state
-        if current_state == "SMILING":
+        if current_state == "HANDS_UP":
+            emoji_to_display = hands_up_emoji
+            emoji_name = "🙌"
+        elif current_state == "MONKEY_THINKING":
+            emoji_to_display = monkey_thinking
+            emoji_name = "🤔 MONKEY THINKING"
+        elif current_state == "MONKEY_UP":
+            emoji_to_display = monkey_finger_up
+            emoji_name = "☝️ MONKEY UP! THAT'S RETARDED!"
+        elif current_state == "SMILING":
             emoji_to_display = smiling_emoji
             emoji_name = "😊"
         elif current_state == "STRAIGHT_FACE":
             emoji_to_display = straight_face_emoji
             emoji_name = "😐"
-        elif current_state == "HANDS_UP":
-            emoji_to_display = hands_up_emoji
-            emoji_name = "🙌"
         else:
             emoji_to_display = blank_emoji
             emoji_name = "❓"
